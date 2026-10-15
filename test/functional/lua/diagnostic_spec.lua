@@ -191,6 +191,65 @@ describe('vim.diagnostic', function()
     }, fn.getcompletion('Diagnostic', 'highlight'))
   end)
 
+  --- Shared assertions for the `source` config option, used by both the
+  --- `virtual_text` and `virtual_lines` diagnostic handlers.
+  --- @param handler 'virtual_text'|'virtual_lines'
+  --- @param leading string text the handler always renders before the
+  ---                       message (`virtual_text` pads with a space even
+  ---                       when `prefix = ''`; `virtual_lines` has no such
+  ---                       padding)
+  local function diagnostic_shows_source_test(handler, leading)
+    return function()
+      local result = exec_lua(function()
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Some error', 0, 0, 0, 0, 'source x'),
+        }, {
+          underline = false,
+          [handler] = { prefix = handler == 'virtual_text' and '' or nil, source = 'always' },
+        })
+
+        if handler == 'virtual_text' then
+          return _G.get_virt_text_extmarks(_G.diagnostic_ns)[1][4].virt_text[3][1]
+        end
+        return _G.get_virt_lines_extmarks(_G.diagnostic_ns)[1][4].virt_lines[1][3][1]
+      end)
+      eq(leading .. 'source x: Some error', result)
+
+      result = exec_lua(function()
+        vim.diagnostic.config({
+          underline = false,
+          [handler] = { prefix = handler == 'virtual_text' and '' or nil, source = 'if_many' },
+        }, _G.diagnostic_ns)
+
+        if handler == 'virtual_text' then
+          return _G.get_virt_text_extmarks(_G.diagnostic_ns)[1][4].virt_text[3][1]
+        end
+        return _G.get_virt_lines_extmarks(_G.diagnostic_ns)[1][4].virt_lines[1][3][1]
+      end)
+      eq(leading .. 'Some error', result)
+
+      result = exec_lua(function()
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Some error', 0, 0, 0, 0, 'source x'),
+          _G.make_error('Another error', 1, 1, 1, 1, 'source y'),
+        })
+
+        local function get_text(extmark)
+          if handler == 'virtual_text' then
+            return extmark[4].virt_text[3][1]
+          end
+          return extmark[4].virt_lines[1][3][1]
+        end
+
+        local extmarks = handler == 'virtual_text' and _G.get_virt_text_extmarks(_G.diagnostic_ns)
+          or _G.get_virt_lines_extmarks(_G.diagnostic_ns)
+        return { get_text(extmarks[1]), get_text(extmarks[2]) }
+      end)
+      eq(leading .. 'source x: Some error', result[1])
+      eq(leading .. 'source y: Another error', result[2])
+    end
+  end
+
   it('retrieves diagnostics from all buffers and namespaces', function()
     local result = exec_lua(function()
       local other_bufnr = vim.api.nvim_create_buf(true, false)
@@ -2073,62 +2132,10 @@ describe('vim.diagnostic', function()
       end
     )
 
-    it('can show diagnostic sources in virtual text', function()
-      local result = exec_lua(function()
-        local diagnostics = {
-          _G.make_error('Some error', 0, 0, 0, 0, 'source x'),
-        }
-
-        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, diagnostics, {
-          underline = false,
-          virtual_text = {
-            prefix = '',
-            source = 'always',
-          },
-        })
-
-        local extmarks = _G.get_virt_text_extmarks(_G.diagnostic_ns)
-        local virt_text = extmarks[1][4].virt_text[3][1]
-        return virt_text
-      end)
-      eq(' source x: Some error', result)
-
-      result = exec_lua(function()
-        vim.diagnostic.config({
-          underline = false,
-          virtual_text = {
-            prefix = '',
-            source = 'if_many',
-          },
-        }, _G.diagnostic_ns)
-
-        local extmarks = _G.get_virt_text_extmarks(_G.diagnostic_ns)
-        local virt_text = extmarks[1][4].virt_text[3][1]
-        return virt_text
-      end)
-      eq(' Some error', result)
-
-      result = exec_lua(function()
-        local diagnostics = {
-          _G.make_error('Some error', 0, 0, 0, 0, 'source x'),
-          _G.make_error('Another error', 1, 1, 1, 1, 'source y'),
-        }
-
-        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, diagnostics, {
-          underline = false,
-          virtual_text = {
-            prefix = '',
-            source = 'if_many',
-          },
-        })
-
-        local extmarks = _G.get_virt_text_extmarks(_G.diagnostic_ns)
-        local virt_text = { extmarks[1][4].virt_text[3][1], extmarks[2][4].virt_text[3][1] }
-        return virt_text
-      end)
-      eq(' source x: Some error', result[1])
-      eq(' source y: Another error', result[2])
-    end)
+    it(
+      'can show diagnostic sources in virtual text',
+      diagnostic_shows_source_test('virtual_text', ' ')
+    )
 
     it('supports a format function for diagnostic messages', function()
       local result = exec_lua(function()
@@ -2386,6 +2393,11 @@ describe('vim.diagnostic', function()
       eq('auto', result[1][4].virt_lines_overflow)
       eq('miss-symbol: Missed symbol `,`', result[1][4].virt_lines[1][3][1])
     end)
+
+    it(
+      'can show diagnostic sources in virtual lines',
+      diagnostic_shows_source_test('virtual_lines', '')
+    )
 
     it('adds space to the left of the diagnostic', function()
       local error_offset = 5
